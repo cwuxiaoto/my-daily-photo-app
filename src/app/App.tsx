@@ -6,11 +6,9 @@ import { PhotoGallery } from '@/app/components/PhotoGallery';
 
 interface Photo {
   date: string;
-  imageData: string;
+  imageData: string; // 在云端版本中，这里存的是图片的 URL 链接
   mood?: string;
 }
-
-const STORAGE_KEY = 'daily-photo-journal';
 
 function App() {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -21,60 +19,71 @@ function App() {
     return new Date().toISOString().split('T')[0];
   };
 
+  // --- 逻辑改动 1：从服务器获取已上传的照片列表 ---
   useEffect(() => {
-    // Load photos from localStorage
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored) {
+    const fetchPhotos = async () => {
       try {
-        const parsedPhotos = JSON.parse(stored) as Photo[];
-        setPhotos(parsedPhotos);
-        
-        // Check if there's a photo for today
-        const today = getTodayDate();
-        const todayPhotoData = parsedPhotos.find(p => p.date === today);
-        if (todayPhotoData) {
-          setTodayPhoto(todayPhotoData.imageData);
-          setTodayMood(todayPhotoData.mood);
+        const response = await fetch('/api/photos'); // 向你的 Droplet 请求照片列表
+        if (response.ok) {
+          const cloudPhotos = await response.json() as Photo[];
+          setPhotos(cloudPhotos);
+          
+          const today = getTodayDate();
+          const todayPhotoData = cloudPhotos.find(p => p.date === today);
+          if (todayPhotoData) {
+            setTodayPhoto(todayPhotoData.imageData);
+            setTodayMood(todayPhotoData.mood);
+          }
         }
       } catch (error) {
-        console.error('Failed to load photos:', error);
+        console.error('无法从云端加载照片:', error);
       }
-    }
+    };
+    fetchPhotos();
   }, []);
 
-  const handleUpload = (imageData: string, mood: string) => {
+  // --- 逻辑改动 2：将照片发送到服务器后端 ---
+  const handleUpload = async (imageData: string, mood: string) => {
     const today = getTodayDate();
     
-    // Check if photo already exists for today
-    const existingPhotoIndex = photos.findIndex(p => p.date === today);
-    
-    let updatedPhotos: Photo[];
-    if (existingPhotoIndex >= 0) {
-      // Update existing photo
-      updatedPhotos = [...photos];
-      updatedPhotos[existingPhotoIndex] = { date: today, imageData, mood };
-    } else {
-      // Add new photo
-      updatedPhotos = [...photos, { date: today, imageData, mood }];
+    try {
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          image: imageData, 
+          mood: mood,
+          date: today 
+        }),
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        // 上传成功后，更新本地显示状态
+        setTodayPhoto(imageData);
+        setTodayMood(mood);
+        // 重新获取列表以确保同步
+        const newListResponse = await fetch('/api/photos');
+        const updatedList = await newListResponse.json();
+        setPhotos(updatedList);
+        alert("🎉 照片已成功存入 DigitalOcean 云端！");
+      } else {
+        alert("上传失败，请检查服务器连接");
+      }
+    } catch (error) {
+      console.error('上传过程出错:', error);
+      alert("网络错误，无法连接到 Droplet");
     }
-    
-    // Sort by date descending (newest first)
-    updatedPhotos.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-    
-    setPhotos(updatedPhotos);
-    setTodayPhoto(imageData);
-    setTodayMood(mood);
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedPhotos));
   };
 
   const hasPhotoToday = todayPhoto !== undefined;
 
+  // --- 下方 UI 部分保持不变 ---
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50">
       <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNjAiIGhlaWdodD0iNjAiIHZpZXdCb3g9IjAgMCA2MCA2MCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48ZyBmaWxsPSJub25lIiBmaWxsLXJ1bGU9ImV2ZW5vZGQiPjxwYXRoIGQ9Ik0zNiAxOGMzLjMxNCAwIDYgMi42ODYgNiA2cy0yLjY4NiA2LTYgNi02LTIuNjg2LTYtNiAyLjY4Ni02IDYtNiIgc3Ryb2tlPSIjOTMzM2VhIiBzdHJva2Utb3BhY2l0eT0iLjA1IiBzdHJva2Utd2lkdGg9IjIiLz48L2c+PC9zdmc+')] opacity-40" />
       
       <div className="relative max-w-7xl mx-auto px-4 py-12">
-        {/* Header */}
         <motion.div 
           className="mb-12 text-center"
           initial={{ opacity: 0, y: -20 }}
@@ -83,14 +92,8 @@ function App() {
         >
           <motion.div 
             className="flex items-center justify-center gap-3 mb-3"
-            animate={{ 
-              scale: [1, 1.02, 1],
-            }}
-            transition={{ 
-              duration: 2,
-              repeat: Infinity,
-              repeatType: "reverse"
-            }}
+            animate={{ scale: [1, 1.02, 1] }}
+            transition={{ duration: 2, repeat: Infinity, repeatType: "reverse" }}
           >
             <div className="relative">
               <div className="absolute inset-0 bg-gradient-to-br from-blue-500 to-purple-500 rounded-full blur-lg opacity-50" />
@@ -109,13 +112,7 @@ function App() {
           </p>
         </motion.div>
 
-        {/* Upload Section */}
-        <motion.div 
-          className="mb-16"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.2 }}
-        >
+        <motion.div className="mb-16" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.2 }}>
           <PhotoUpload 
             onUpload={handleUpload} 
             hasPhotoToday={hasPhotoToday}
@@ -124,12 +121,7 @@ function App() {
           />
         </motion.div>
 
-        {/* Gallery Section */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.6, delay: 0.4 }}
-        >
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.4 }}>
           <PhotoGallery photos={photos} />
         </motion.div>
       </div>
